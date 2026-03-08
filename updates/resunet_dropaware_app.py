@@ -139,6 +139,8 @@ def compute_dataset_metrics(
     antenna_scaler_path: str,
     base_resunet_model_path: str,
     base_resunet_scaler_path: str,
+    tuned_resunet_model_path: str,
+    tuned_resunet_scaler_path: str,
     dropaware_v3_model_path: str,
     dropaware_v3_scaler_path: str,
 ) -> pd.DataFrame:
@@ -155,41 +157,51 @@ def compute_dataset_metrics(
 
     antenna_model, antenna_scaler = load_antenna(project_root, antenna_model_path, antenna_scaler_path)
     base_model, base_scaler = load_resunet(project_root, base_resunet_model_path, base_resunet_scaler_path, target_len)
+    tuned_model, tuned_scaler = load_resunet(
+        project_root, tuned_resunet_model_path, tuned_resunet_scaler_path, target_len
+    )
     dropaware_model, dropaware_scaler = load_resunet(
         project_root, dropaware_v3_model_path, dropaware_v3_scaler_path, target_len
     )
 
     x_ant = antenna_scaler.transform(x_all).astype(np.float32)
     x_base = base_scaler.transform(x_all).astype(np.float32)
+    x_tuned = tuned_scaler.transform(x_all).astype(np.float32)
     x_drop = dropaware_scaler.transform(x_all).astype(np.float32)
 
     pred_ant = run_model_batch(antenna_model, x_ant)
     pred_base = run_model_batch(base_model, x_base)
+    pred_tuned = run_model_batch(tuned_model, x_tuned)
     pred_drop = run_model_batch(dropaware_model, x_drop)
 
     mag_true = to_mag(real_all, imag_all)
     mag_ant = to_mag(pred_ant[:, 0, :], pred_ant[:, 1, :])
     mag_base = to_mag(pred_base[:, 0, :], pred_base[:, 1, :])
+    mag_tuned = to_mag(pred_tuned[:, 0, :], pred_tuned[:, 1, :])
     mag_drop = to_mag(pred_drop[:, 0, :], pred_drop[:, 1, :])
 
     if apply_gaussian:
         mag_base = gaussian_smooth_2d(mag_base, gauss_sigma, gauss_window)
+        mag_tuned = gaussian_smooth_2d(mag_tuned, gauss_sigma, gauss_window)
         mag_drop = gaussian_smooth_2d(mag_drop, gauss_sigma, gauss_window)
 
     if magnitude_db:
         y_true = to_db(mag_true)
         y_ant = to_db(mag_ant)
         y_base = to_db(mag_base)
+        y_tuned = to_db(mag_tuned)
         y_drop = to_db(mag_drop)
     else:
         y_true = mag_true
         y_ant = mag_ant
         y_base = mag_base
+        y_tuned = mag_tuned
         y_drop = mag_drop
 
     rows = [
         {"Model": "Antenna NN", "MSE": float(np.mean((y_ant - y_true) ** 2)), "RSE": rse(y_ant, y_true)},
         {"Model": "Base ResUNet", "MSE": float(np.mean((y_base - y_true) ** 2)), "RSE": rse(y_base, y_true)},
+        {"Model": "ResUNet Tuned", "MSE": float(np.mean((y_tuned - y_true) ** 2)), "RSE": rse(y_tuned, y_true)},
         {"Model": "DropAware v3", "MSE": float(np.mean((y_drop - y_true) ** 2)), "RSE": rse(y_drop, y_true)},
     ]
     return pd.DataFrame(rows).sort_values("RSE", ascending=True).reset_index(drop=True)
@@ -207,7 +219,7 @@ def main() -> None:
         trace_label = st.selectbox("Trace label", ["S11", "Sdd11"], index=0)
         magnitude_db = st.checkbox("Show magnitude in dB", value=True)
 
-        st.subheader("Gaussian Filter (Base ResUNet + DropAware v3)")
+        st.subheader("Gaussian Filter (Base/Tuned ResUNet + DropAware v3)")
         apply_gaussian = st.checkbox("Apply Gaussian filter", value=False)
         gauss_sigma = st.slider("Gaussian sigma", 0.1, 3.0, 1.1, 0.1, disabled=not apply_gaussian)
         gauss_window = GAUSSIAN_WINDOW_LENGTH
@@ -218,6 +230,11 @@ def main() -> None:
 
         base_resunet_model_path = st.text_input("Base ResUNet model", value="NNModel/trained_model_resunet_dual.pt")
         base_resunet_scaler_path = st.text_input("Base ResUNet scaler", value="NNModel/scaler_resunet_dual.gz")
+
+        tuned_resunet_model_path = st.text_input(
+            "ResUNet Tuned model", value="NNModel/trained_model_resunet_dual_tuned.pt"
+        )
+        tuned_resunet_scaler_path = st.text_input("ResUNet Tuned scaler", value="NNModel/scaler_resunet_dual_tuned.gz")
 
         dropaware_v3_model_path = st.text_input(
             "DropAware v3 model", value="NNModel/trained_model_resunet_dropaware_v3rse.pt"
@@ -250,6 +267,9 @@ def main() -> None:
     base_model, base_scaler = load_resunet(
         str(project_root), base_resunet_model_path, base_resunet_scaler_path, target_len=real_true.shape[0]
     )
+    tuned_model, tuned_scaler = load_resunet(
+        str(project_root), tuned_resunet_model_path, tuned_resunet_scaler_path, target_len=real_true.shape[0]
+    )
     dropaware_model, dropaware_scaler = load_resunet(
         str(project_root), dropaware_v3_model_path, dropaware_v3_scaler_path, target_len=real_true.shape[0]
     )
@@ -257,31 +277,37 @@ def main() -> None:
     x_one = x_df.iloc[[idx]].values.astype(np.float32)
     x_ant = antenna_scaler.transform(x_one).astype(np.float32)
     x_base = base_scaler.transform(x_one).astype(np.float32)
+    x_tuned = tuned_scaler.transform(x_one).astype(np.float32)
     x_drop = dropaware_scaler.transform(x_one).astype(np.float32)
 
     with torch.no_grad():
         pred_ant = antenna_model(torch.tensor(x_ant))
         pred_base = base_model(torch.tensor(x_base))
+        pred_tuned = tuned_model(torch.tensor(x_tuned))
         pred_drop = dropaware_model(torch.tensor(x_drop))
 
     mag_ant = to_mag(pred_ant[0, 0, :].numpy(), pred_ant[0, 1, :].numpy())
     mag_base = to_mag(pred_base[0, 0, :].numpy(), pred_base[0, 1, :].numpy())
+    mag_tuned = to_mag(pred_tuned[0, 0, :].numpy(), pred_tuned[0, 1, :].numpy())
     mag_drop = to_mag(pred_drop[0, 0, :].numpy(), pred_drop[0, 1, :].numpy())
 
     if apply_gaussian:
         mag_base = gaussian_smooth_1d(mag_base, gauss_sigma, gauss_window)
+        mag_tuned = gaussian_smooth_1d(mag_tuned, gauss_sigma, gauss_window)
         mag_drop = gaussian_smooth_1d(mag_drop, gauss_sigma, gauss_window)
 
     if magnitude_db:
         y_true = to_db(mag_true)
         y_ant = to_db(mag_ant)
         y_base = to_db(mag_base)
+        y_tuned = to_db(mag_tuned)
         y_drop = to_db(mag_drop)
         y_label = f"|{trace_label}| (dB)"
     else:
         y_true = mag_true
         y_ant = mag_ant
         y_base = mag_base
+        y_tuned = mag_tuned
         y_drop = mag_drop
         y_label = f"|{trace_label}|"
 
@@ -289,6 +315,7 @@ def main() -> None:
         [
             {"Model": "Antenna NN", "MSE": float(np.mean((y_ant - y_true) ** 2)), "RSE": rse(y_ant, y_true)},
             {"Model": "Base ResUNet", "MSE": float(np.mean((y_base - y_true) ** 2)), "RSE": rse(y_base, y_true)},
+            {"Model": "ResUNet Tuned", "MSE": float(np.mean((y_tuned - y_true) ** 2)), "RSE": rse(y_tuned, y_true)},
             {"Model": "DropAware v3", "MSE": float(np.mean((y_drop - y_true) ** 2)), "RSE": rse(y_drop, y_true)},
         ]
     ).sort_values("RSE", ascending=True).reset_index(drop=True)
@@ -302,6 +329,7 @@ def main() -> None:
     fig.add_trace(go.Scatter(x=x_axis, y=y_true, mode="lines", name=f"Real {trace_label}", line=dict(width=3)))
     fig.add_trace(go.Scatter(x=x_axis, y=y_ant, mode="lines", name="Antenna NN", line=dict(width=2, dash="dash")))
     fig.add_trace(go.Scatter(x=x_axis, y=y_base, mode="lines", name="Base ResUNet", line=dict(width=2, dash="dot")))
+    fig.add_trace(go.Scatter(x=x_axis, y=y_tuned, mode="lines", name="ResUNet Tuned", line=dict(width=2)))
     fig.add_trace(go.Scatter(x=x_axis, y=y_drop, mode="lines", name="DropAware v3", line=dict(width=2, dash="dashdot")))
     fig.update_layout(
         title=f"{trace_label} comparison ({dataset_label}, sample={idx})",
@@ -328,6 +356,8 @@ def main() -> None:
         antenna_scaler_path=antenna_scaler_path,
         base_resunet_model_path=base_resunet_model_path,
         base_resunet_scaler_path=base_resunet_scaler_path,
+        tuned_resunet_model_path=tuned_resunet_model_path,
+        tuned_resunet_scaler_path=tuned_resunet_scaler_path,
         dropaware_v3_model_path=dropaware_v3_model_path,
         dropaware_v3_scaler_path=dropaware_v3_scaler_path,
     )

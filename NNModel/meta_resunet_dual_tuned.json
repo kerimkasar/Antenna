@@ -1,0 +1,23 @@
+{
+  "model": "DualResUNet1D",
+  "dataset": "old_excel",
+  "base_channels": 64,
+  "weights": {
+    "w_ri": 0.13899863008405067,
+    "w_mag_db": 0.7638919733850194,
+    "w_slope": 0.2192205135282351,
+    "w_curv": 0.0801393764679011,
+    "w_passivity": 0.08642834644654523,
+    "w_hilbert": 0.0016467595436641957
+  },
+  "db_loss_mode": "rse",
+  "db_weight_alpha": 0.7727374508106509,
+  "db_weight_max": 6.934472157654941,
+  "db_weight_eps": 4.5897367362261086e-05,
+  "hilbert_edge_frac": 0.19548647782429918,
+  "hilbert_warmup_epochs": 104,
+  "n_samples": 5000,
+  "best_val_loss": 0.04502268856953061,
+  "model_path": "C:\\Users\\Kerim\\Desktop\\antenna\\Antenna\\NNModel\\trained_model_resunet_dual_tuned.pt",
+  "scaler_path": "C:\\Users\\Kerim\\Desktop\\antenna\\Antenna\\NNModel\\scaler_resunet_dual_tuned.gz"
+}
